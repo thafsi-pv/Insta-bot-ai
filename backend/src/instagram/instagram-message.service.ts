@@ -114,7 +114,7 @@ export class InstagramMessageService {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-          timeout: 10000,
+          timeout: 25000,
         },
       );
       this.logger.log(`Comment reply posted successfully: ${response.data?.id}`);
@@ -159,7 +159,7 @@ export class InstagramMessageService {
             Authorization: `Bearer ${accessToken}`,
             'Content-Type': 'application/json',
           },
-          timeout: 10000,
+          timeout: 25000,
         },
       );
       this.logger.log(`Private DM sent to commenter successfully: ${response.data?.message_id}`);

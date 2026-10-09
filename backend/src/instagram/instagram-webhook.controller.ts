@@ -109,7 +109,22 @@ export class InstagramWebhookController {
               where: { OR: [{ instagramUserId: entry.id }, { pageId: entry.id }] },
             }) || await this.prisma.instagramAccount.findFirst();
 
-            if (!account || !commentId || fromUser?.id === account.instagramUserId) continue;
+            const isOwnComment =
+              fromUser?.id === entry.id ||
+              fromUser?.id === account.instagramUserId ||
+              fromUser?.id === account.pageId ||
+              (account.username &&
+                fromUser?.username &&
+                fromUser.username.toLowerCase() === account.username.toLowerCase());
+
+            if (!account || !commentId || isOwnComment) {
+              if (isOwnComment) {
+                console.log(
+                  `🔇 [WEBHOOK COMMENT] Comment was made by our own account (@${fromUser?.username}), skipping.`,
+                );
+              }
+              continue;
+            }
 
             try {
               // Resolve which product this post is linked to (if any)
