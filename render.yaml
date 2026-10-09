@@ -5,7 +5,7 @@ services:
     region: singapore  # closest to India
     plan: free
     rootDir: backend
-    buildCommand: npm install --include=dev && npm run build
+    buildCommand: npm install --include=dev && npm run build:prod && npm run db:seed
     startCommand: npm run start:prod
     healthCheckPath: /health
     envVars:
