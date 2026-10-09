@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: insta-bot-backend
+    env: node
+    region: singapore  # closest to India
+    plan: free
+    rootDir: backend
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      # Add remaining env vars in Render Dashboard > Environment
+      # DATABASE_URL, REDIS_URL, JWT_SECRET, ENCRYPTION_KEY,
+      # OPENROUTER_API_KEY, INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET,
+      # INSTAGRAM_WEBHOOK_VERIFY_TOKEN, INSTAGRAM_REDIRECT_URI,
+      # FRONTEND_URL, CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET

@@ -13,12 +13,18 @@ async function bootstrap() {
   const port = configService.get<number>('PORT', 3000);
 
   // Enable CORS
+  const frontendUrl = configService.get<string>('FRONTEND_URL', 'http://localhost:5173');
+  const allowedOrigins = frontendUrl.split(',').map((u) => u.trim()).filter(Boolean);
+  allowedOrigins.push('http://localhost:5173', 'http://127.0.0.1:5173');
+
   app.enableCors({
-    origin: [
-      configService.get<string>('FRONTEND_URL', 'http://localhost:5173'),
-      'http://localhost:5173',
-      'http://127.0.0.1:5173',
-    ],
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.some((o) => origin.startsWith(o))) {
+        callback(null, true);
+      } else {
+        callback(new Error(`CORS: Origin ${origin} not allowed`));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
