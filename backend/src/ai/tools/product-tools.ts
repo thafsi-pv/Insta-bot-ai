@@ -160,6 +160,72 @@ export class ProductTools {
           },
         },
       },
+      {
+        type: 'function',
+        function: {
+          name: 'cancel_order',
+          description:
+            'Cancel or reject an active customer order when the customer asks to cancel their order, drop the purchase, or reject it.',
+          parameters: {
+            type: 'object',
+            properties: {
+              orderId: {
+                type: 'string',
+                description: 'Optional order ID if known or mentioned by customer.',
+              },
+              reason: {
+                type: 'string',
+                description: 'Optional reason for cancellation.',
+              },
+              conversationId: {
+                type: 'string',
+                description: 'The active conversation ID if available.',
+              },
+              customerId: {
+                type: 'string',
+                description: 'The customer ID if available.',
+              },
+            },
+          },
+        },
+      },
+      {
+        type: 'function',
+        function: {
+          name: 'update_order',
+          description:
+            'Update or change an existing pending order (e.g., change size, color, or change to a different product) when requested by the customer.',
+          parameters: {
+            type: 'object',
+            properties: {
+              orderId: {
+                type: 'string',
+                description: 'Optional order ID if known.',
+              },
+              newProductName: {
+                type: 'string',
+                description: 'New product name if customer wants to switch to a different product.',
+              },
+              newSize: {
+                type: 'string',
+                description: 'New size requested (e.g. "S", "M", "L", "XL").',
+              },
+              newColor: {
+                type: 'string',
+                description: 'New color requested (e.g. "Black", "White").',
+              },
+              conversationId: {
+                type: 'string',
+                description: 'The active conversation ID if available.',
+              },
+              customerId: {
+                type: 'string',
+                description: 'The customer ID if available.',
+              },
+            },
+          },
+        },
+      },
     ];
   }
 
@@ -179,6 +245,10 @@ export class ProductTools {
         return this.getProductPhotos(args.productId);
       case 'place_order':
         return this.placeOrder(args as any);
+      case 'cancel_order':
+        return this.cancelOrder(args as any);
+      case 'update_order':
+        return this.updateOrder(args as any);
       default:
         return { error: `Unknown tool: ${name}` };
     }
@@ -447,6 +517,32 @@ export class ProductTools {
     };
   }
 
+  isInvalidCustomerName(name: string): boolean {
+    if (!name || name.trim().length < 2 || name.trim().length > 40) return true;
+    const lower = name.toLowerCase().trim();
+    const invalidStarters = [
+      'hey', 'hello', 'hi', 'thanks', 'thank you', 'dear', 'welcome',
+      'to place', 'reply with', 'product', 'size', 'payment', 'address', 'details',
+    ];
+    if (invalidStarters.some((s) => lower.startsWith(s))) return true;
+    if (lower.includes('@') || lower.includes('http') || lower.includes('details you asked')) return true;
+    if (/[👋🎁✨❤️😊📦💰📏]/.test(name)) return true;
+    return false;
+  }
+
+  isInvalidAddress(address: string): boolean {
+    if (!address || address.trim().length < 6) return true;
+    const lower = address.toLowerCase().trim();
+    const templateWords = [
+      'to place your order', 'just reply with', 'sizes available', 'in stock',
+      'price: ₹', 'price:', 'details you asked', 'payment (cod', 'confirm everything',
+      'thanks for following',
+    ];
+    if (templateWords.some((w) => lower.includes(w))) return true;
+    if (/[📦💰📏]/.test(address)) return true;
+    return false;
+  }
+
   async placeOrder(params: {
     customerName: string;
     productName: string;
@@ -457,6 +553,25 @@ export class ProductTools {
     conversationId?: string;
     customerId?: string;
   }) {
+    const cleanName = (params.customerName || '').trim();
+    const cleanAddress = (params.shippingAddress || '').trim();
+
+    if (this.isInvalidCustomerName(cleanName)) {
+      this.logger.warn(`[REJECT ORDER] Invalid customer name: "${cleanName}"`);
+      return {
+        error: 'INVALID_CUSTOMER_NAME',
+        message: 'Could not record order: Please provide a valid customer full name.',
+      };
+    }
+
+    if (this.isInvalidAddress(cleanAddress)) {
+      this.logger.warn(`[REJECT ORDER] Invalid shipping address: "${cleanAddress}"`);
+      return {
+        error: 'INVALID_SHIPPING_ADDRESS',
+        message: 'Could not record order: Please provide a valid delivery address with house/street, city, and pincode.',
+      };
+    }
+
     // Find matching product
     const product = await this.prisma.product.findFirst({
       where: {
@@ -544,8 +659,8 @@ export class ProductTools {
       data: {
         customerId: custId,
         conversationId: params.conversationId || undefined,
-        customerName: params.customerName.trim(),
-        shippingAddress: params.shippingAddress.trim(),
+        customerName: cleanName,
+        shippingAddress: cleanAddress,
         paymentMethod,
         status: OrderStatus.PENDING_APPROVAL,
         totalAmount: price,
@@ -568,7 +683,7 @@ export class ProductTools {
       },
     });
 
-    // ⚡ INSTANT STOCK REDUCTION: Reduce corresponding variant stock immediately upon order placement (before human approval)
+    // ⚡ INSTANT STOCK REDUCTION: Reduce corresponding variant stock immediately upon order placement
     if (matchedVariant) {
       const newStock = Math.max(0, matchedVariant.stock - 1);
       await this.prisma.productVariant.update({
@@ -614,6 +729,229 @@ export class ProductTools {
       price,
       paymentMethod: 'COD',
       message: `Thank you ${order.customerName}! We have received your COD order for "${product?.name || params.productName}${variantConfirmText}" (₹${price}). Our team will verify and confirm shortly! ❤️`,
+    };
+  }
+
+  /**
+   * Cancel or reject an existing customer order
+   */
+  async cancelOrder(params: {
+    conversationId?: string;
+    customerId?: string;
+    orderId?: string;
+    reason?: string;
+  }) {
+    let order = null;
+
+    if (params.orderId) {
+      order = await this.prisma.order.findUnique({
+        where: { id: params.orderId },
+        include: { items: true },
+      });
+    }
+
+    if (!order && params.conversationId) {
+      order = await this.prisma.order.findFirst({
+        where: {
+          conversationId: params.conversationId,
+          status: { in: [OrderStatus.PENDING_APPROVAL, OrderStatus.APPROVED] },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { items: true },
+      });
+    }
+
+    if (!order && params.customerId) {
+      order = await this.prisma.order.findFirst({
+        where: {
+          customerId: params.customerId,
+          status: { in: [OrderStatus.PENDING_APPROVAL, OrderStatus.APPROVED] },
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { items: true },
+      });
+    }
+
+    if (!order) {
+      return {
+        success: false,
+        message: 'We could not find an active pending order to cancel. If you have an Order ID, please let us know! 😊',
+      };
+    }
+
+    // Restore reserved stock back to inventory
+    for (const item of order.items) {
+      if (item.variantId) {
+        await this.prisma.productVariant.update({
+          where: { id: item.variantId },
+          data: { stock: { increment: item.quantity } },
+        });
+        this.logger.log(`[STOCK RESTORED VIA AI] Restored ${item.quantity} to variant ${item.variantId} after cancellation.`);
+      }
+    }
+
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { status: OrderStatus.REJECTED },
+    });
+
+    const itemNames = order.items.map((i) => i.name).join(', ') || 'item';
+    return {
+      success: true,
+      orderId: order.id,
+      message: `Your order for "${itemNames}" has been cancelled as requested, and the item has been released. Let us know if you need anything else! 😊`,
+    };
+  }
+
+  /**
+   * Update size, color, or item in an existing pending order
+   */
+  async updateOrder(params: {
+    conversationId?: string;
+    customerId?: string;
+    orderId?: string;
+    newProductName?: string;
+    newSize?: string;
+    newColor?: string;
+  }) {
+    let order = null;
+
+    if (params.orderId) {
+      order = await this.prisma.order.findUnique({
+        where: { id: params.orderId },
+        include: { items: { include: { product: true, variant: true } } },
+      });
+    }
+
+    if (!order && params.conversationId) {
+      order = await this.prisma.order.findFirst({
+        where: {
+          conversationId: params.conversationId,
+          status: OrderStatus.PENDING_APPROVAL,
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { items: { include: { product: true, variant: true } } },
+      });
+    }
+
+    if (!order && params.customerId) {
+      order = await this.prisma.order.findFirst({
+        where: {
+          customerId: params.customerId,
+          status: OrderStatus.PENDING_APPROVAL,
+        },
+        orderBy: { createdAt: 'desc' },
+        include: { items: { include: { product: true, variant: true } } },
+      });
+    }
+
+    if (!order || order.items.length === 0) {
+      return {
+        success: false,
+        message: 'No pending order was found to update. Would you like to place a new order instead?',
+      };
+    }
+
+    const currentItem = order.items[0];
+
+    // Find the target product (new product or current product)
+    const targetProduct = params.newProductName
+      ? await this.prisma.product.findFirst({
+          where: { name: { contains: params.newProductName.trim(), mode: 'insensitive' } },
+          include: { variants: { where: { active: true } } },
+        })
+      : currentItem.productId
+      ? await this.prisma.product.findUnique({
+          where: { id: currentItem.productId },
+          include: { variants: { where: { active: true } } },
+        })
+      : null;
+
+    if (!targetProduct) {
+      return {
+        success: false,
+        message: 'Could not find the requested product in our catalog.',
+      };
+    }
+
+    // Match new variant
+    let matchedVariant = null;
+    if (params.newSize || params.newColor) {
+      matchedVariant = targetProduct.variants.find((v) => {
+        const matchSize = params.newSize ? v.size?.toLowerCase() === params.newSize.trim().toLowerCase() : true;
+        const matchColor = params.newColor ? v.color?.toLowerCase() === params.newColor.trim().toLowerCase() : true;
+        return matchSize && matchColor;
+      });
+    } else {
+      matchedVariant = targetProduct.variants.find((v) => v.stock > 0) || targetProduct.variants[0];
+    }
+
+    if (!matchedVariant) {
+      const availSizes = targetProduct.variants.map((v) => v.size).filter(Boolean).join(', ');
+      return {
+        success: false,
+        message: `Sorry, we could not find ${targetProduct.name} in that size/color. Available sizes: ${availSizes || 'Standard'}.`,
+      };
+    }
+
+    if (matchedVariant.stock <= 0 && matchedVariant.id !== currentItem.variantId) {
+      return {
+        success: false,
+        message: `Sorry, ${targetProduct.name} in Size: ${matchedVariant.size || 'Standard'} is currently out of stock!`,
+      };
+    }
+
+    // Revert stock of previous variant
+    if (currentItem.variantId && currentItem.variantId !== matchedVariant.id) {
+      await this.prisma.productVariant.update({
+        where: { id: currentItem.variantId },
+        data: { stock: { increment: currentItem.quantity } },
+      });
+    }
+
+    // Decrement stock of new variant
+    if (matchedVariant.id !== currentItem.variantId) {
+      await this.prisma.productVariant.update({
+        where: { id: matchedVariant.id },
+        data: { stock: { decrement: currentItem.quantity } },
+      });
+    }
+
+    const newPrice = matchedVariant.priceOverride || targetProduct.price;
+    const variantLabel = [
+      matchedVariant.size ? `Size: ${matchedVariant.size}` : null,
+      matchedVariant.color ? `Color: ${matchedVariant.color}` : null,
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const newDisplayName = variantLabel
+      ? `${targetProduct.name} (${variantLabel})`
+      : targetProduct.name;
+
+    // Update item
+    await this.prisma.orderItem.update({
+      where: { id: currentItem.id },
+      data: {
+        productId: targetProduct.id,
+        variantId: matchedVariant.id,
+        name: newDisplayName,
+        price: newPrice,
+      },
+    });
+
+    // Update order total
+    await this.prisma.order.update({
+      where: { id: order.id },
+      data: { totalAmount: newPrice },
+    });
+
+    return {
+      success: true,
+      orderId: order.id,
+      productName: targetProduct.name,
+      variant: variantLabel,
+      price: newPrice,
+      message: `We've updated your order! New selection: "${newDisplayName}" (₹${newPrice}). We'll process your order with this updated item! ✨`,
     };
   }
 }

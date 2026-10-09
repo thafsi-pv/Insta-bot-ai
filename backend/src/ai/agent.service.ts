@@ -148,7 +148,7 @@ Remember:
         // Final assistant text response produced
         let finalReply = message.content?.trim() || 'How can I assist you with our products today?';
 
-        // Fallback Order Safeguard: If the LLM failed to invoke place_order tool despite order info being sent
+        // Fallback Order Safeguard: If the LLM failed to invoke place_order tool despite complete order info
         if (!toolsExecuted.includes('place_order')) {
           const lastUserMsg = [...context.recentMessages].reverse().find((m) => m.role === 'user')?.content || '';
           let defaultProductName = '';
@@ -159,7 +159,7 @@ Remember:
 
           const parsedOrder = this.parseOrderFromText(lastUserMsg, defaultProductName);
           if (parsedOrder && parsedOrder.customerName && (parsedOrder.productName || defaultProductName)) {
-            this.logger.log(`[ORDER SAFEGUARD] Auto-detected order details from message. Placing order...`);
+            this.logger.log(`[ORDER SAFEGUARD] Auto-detected valid order details from message. Placing order...`);
             const orderResult = await this.productTools.placeOrder({
               ...parsedOrder,
               conversationId: context.conversationId,
@@ -168,7 +168,32 @@ Remember:
 
             if (orderResult.success) {
               toolsExecuted.push('place_order');
+              finalReply = orderResult.message;
               console.log(`🎉 [ORDER SAFEGUARD SUCCESS] Order ID: ${orderResult.orderId} created for ${orderResult.customerName}`);
+            }
+          }
+        }
+
+        // Fallback Cancellation Safeguard: If customer requested cancellation but LLM missed the tool call
+        if (!toolsExecuted.includes('cancel_order')) {
+          const lastUserMsgLower = (
+            [...context.recentMessages].reverse().find((m) => m.role === 'user')?.content || ''
+          ).toLowerCase();
+          if (
+            lastUserMsgLower.includes('cancel my order') ||
+            lastUserMsgLower.includes('cancel the order') ||
+            lastUserMsgLower.includes('cancel order') ||
+            lastUserMsgLower.includes('cancel it') ||
+            lastUserMsgLower.includes('reject order') ||
+            lastUserMsgLower.includes('don\'t want it')
+          ) {
+            const cancelResult = await this.productTools.cancelOrder({
+              conversationId: context.conversationId,
+              customerId: context.customerId,
+            });
+            if (cancelResult.success) {
+              toolsExecuted.push('cancel_order');
+              finalReply = cancelResult.message;
             }
           }
         }
@@ -196,12 +221,17 @@ Remember:
   private parseOrderFromText(text: string, defaultProductName?: string) {
     if (!text) return null;
     const lower = text.toLowerCase();
-    const hasCodOrPrepay =
-      lower.includes('cod') ||
-      lower.includes('prepayment') ||
-      lower.includes('cash on delivery') ||
-      lower.includes('pre-payment') ||
-      lower.includes('pre-pay');
+
+    // Inquiries or greeting words MUST NEVER trigger order creation
+    const inquiryWords = [
+      'how much', 'price', 'rate', 'cost', 'available', 'is this', 'in stock',
+      'send pic', 'photos', 'show me', 'details you asked', 'thanks for following',
+      'hello', 'hey', 'hi',
+    ];
+    // If the message has no explicit "address:" label and asks inquiry questions, reject
+    if (!lower.includes('address:') && inquiryWords.some((w) => lower.includes(w))) {
+      return null;
+    }
 
     const lines = text
       .split('\n')
@@ -210,25 +240,31 @@ Remember:
 
     let customerName = '';
     let productName = defaultProductName || '';
-    let paymentMethod = hasCodOrPrepay
-      ? lower.includes('prepay')
-        ? 'PREPAYMENT'
-        : 'COD'
-      : 'COD';
+    let paymentMethod = 'COD';
     let shippingAddress = '';
     let size = '';
+
+    const hasCodOrPrepay =
+      lower.includes('cod') ||
+      lower.includes('prepayment') ||
+      lower.includes('cash on delivery') ||
+      lower.includes('pre-payment');
+
+    if (lower.includes('prepay')) {
+      paymentMethod = 'PREPAYMENT';
+    }
 
     for (const line of lines) {
       const lineLower = line.toLowerCase();
       if (lineLower.startsWith('name:')) {
         customerName = line.substring(5).trim();
       } else if (
-        lineLower.startsWith('product') ||
         lineLower.startsWith('product name:') ||
+        lineLower.startsWith('product:') ||
         lineLower.startsWith('item:')
       ) {
         productName = line.replace(/^(product name|product|item)\s*:\s*/i, '').trim();
-      } else if (lineLower.startsWith('payment') || lineLower.startsWith('payment:')) {
+      } else if (lineLower.startsWith('payment:') || lineLower.startsWith('payment (cod')) {
         paymentMethod = lineLower.includes('prepay') ? 'PREPAYMENT' : 'COD';
       } else if (lineLower.startsWith('address:')) {
         shippingAddress = line.substring(8).trim();
@@ -237,33 +273,22 @@ Remember:
       }
     }
 
-    // Heuristic for newline-separated values without explicit labels (e.g., "name:abc\nblack hoodie\ncod\nkerala, 123")
-    if ((!customerName || !shippingAddress) && lines.length >= 3 && (hasCodOrPrepay || lines.some((l) => l.toLowerCase().includes('name:')))) {
-      if (!customerName) customerName = lines[0].replace(/^name\s*:\s*/i, '').trim();
-      if (!productName && lines.length > 1) productName = lines[1].replace(/^product\s*:\s*/i, '').trim();
-      if (!shippingAddress && lines.length >= 3) {
-        // Exclude lines that are payment method or product
-        const remaining = lines.filter(
-          (l) =>
-            !l.toLowerCase().startsWith('name:') &&
-            l !== lines[0] &&
-            l !== productName &&
-            !['cod', 'prepayment', 'pre-payment', 'cash on delivery'].includes(l.toLowerCase().trim()),
-        );
-        shippingAddress = remaining.join(', ');
-      }
+    // Validate extracted values
+    if (
+      !customerName ||
+      !shippingAddress ||
+      this.productTools.isInvalidCustomerName(customerName) ||
+      this.productTools.isInvalidAddress(shippingAddress)
+    ) {
+      return null;
     }
 
-    if (customerName && (productName || defaultProductName) && (shippingAddress || lines.length >= 2)) {
-      return {
-        customerName,
-        productName: productName || defaultProductName || 'Product',
-        paymentMethod,
-        shippingAddress: shippingAddress || 'Address provided in chat',
-        size,
-      };
-    }
-
-    return null;
+    return {
+      customerName,
+      productName: productName || defaultProductName || 'Product',
+      paymentMethod,
+      shippingAddress,
+      size,
+    };
   }
 }
