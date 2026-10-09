@@ -18,7 +18,7 @@ async function bootstrap() {
   allowedOrigins.push('http://localhost:5173', 'http://127.0.0.1:5173');
 
   app.enableCors({
-    origin: (origin, callback) => {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (!origin || allowedOrigins.some((o) => origin.startsWith(o))) {
         callback(null, true);
       } else {
