@@ -520,6 +520,14 @@ export class ProductTools {
   isInvalidCustomerName(name: string): boolean {
     if (!name || name.trim().length < 2 || name.trim().length > 40) return true;
     const lower = name.toLowerCase().trim();
+
+    // Must contain actual letters (not pure numbers like "3434" or mostly digits)
+    const letterCount = (name.match(/[a-zA-Z]/g) || []).length;
+    if (letterCount < 2) return true;
+    if (/^\d+$/.test(name.trim())) return true;
+    const digitCount = (name.match(/\d/g) || []).length;
+    if (digitCount >= letterCount) return true;
+
     const invalidStarters = [
       'hey', 'hello', 'hi', 'thanks', 'thank you', 'dear', 'welcome',
       'to place', 'reply with', 'product', 'size', 'payment', 'address', 'details',
@@ -531,7 +539,7 @@ export class ProductTools {
   }
 
   isInvalidAddress(address: string): boolean {
-    if (!address || address.trim().length < 6) return true;
+    if (!address || address.trim().length < 10) return true;
     const lower = address.toLowerCase().trim();
     const templateWords = [
       'to place your order', 'just reply with', 'sizes available', 'in stock',
@@ -540,6 +548,15 @@ export class ProductTools {
     ];
     if (templateWords.some((w) => lower.includes(w))) return true;
     if (/[📦💰📏]/.test(address)) return true;
+
+    // Must contain at least 6 letters for area/city/street
+    const letterCount = (address.match(/[a-zA-Z]/g) || []).length;
+    if (letterCount < 6) return true;
+
+    // Reject short random comma strings like "123,ggtg"
+    const parts = address.split(/[,\s]+/).filter((p) => p.length >= 2);
+    if (parts.length < 2) return true;
+
     return false;
   }
 
@@ -556,23 +573,44 @@ export class ProductTools {
     const cleanName = (params.customerName || '').trim();
     const cleanAddress = (params.shippingAddress || '').trim();
 
+    // 1. Strict Name Check
     if (this.isInvalidCustomerName(cleanName)) {
       this.logger.warn(`[REJECT ORDER] Invalid customer name: "${cleanName}"`);
       return {
         error: 'INVALID_CUSTOMER_NAME',
-        message: 'Could not record order: Please provide a valid customer full name.',
+        message: 'Could not place order: Please provide a valid customer full name (letters only, e.g. "Rahul Sharma").',
       };
     }
 
+    // 2. Strict Address Check
     if (this.isInvalidAddress(cleanAddress)) {
       this.logger.warn(`[REJECT ORDER] Invalid shipping address: "${cleanAddress}"`);
       return {
         error: 'INVALID_SHIPPING_ADDRESS',
-        message: 'Could not record order: Please provide a valid delivery address with house/street, city, and pincode.',
+        message: 'Could not place order: Please provide a complete delivery address with house/street, area, city, and pincode.',
       };
     }
 
-    // Find matching product
+    // 3. Strict Payment Method Check
+    const rawPayment = (params.paymentMethod || '').trim().toLowerCase();
+    const isCod = rawPayment === 'cod' || rawPayment.includes('cash on delivery');
+    const isPrepay =
+      rawPayment === 'prepayment' ||
+      rawPayment === 'pre-payment' ||
+      rawPayment === 'online' ||
+      rawPayment === 'upi' ||
+      rawPayment.includes('prepay');
+
+    if (!isCod && !isPrepay) {
+      this.logger.warn(`[REJECT ORDER] Invalid payment method: "${params.paymentMethod}"`);
+      return {
+        error: 'INVALID_PAYMENT_METHOD',
+        message: 'Could not place order: Please choose a valid payment method: "COD" (Cash on Delivery) or "Prepayment" (UPI / Online).',
+      };
+    }
+    const paymentMethod = isPrepay ? PaymentMethod.PREPAYMENT : PaymentMethod.COD;
+
+    // 4. Find matching product
     const product = await this.prisma.product.findFirst({
       where: {
         name: { contains: params.productName.trim(), mode: 'insensitive' },
@@ -582,40 +620,64 @@ export class ProductTools {
       },
     });
 
-    // Smart Variant Matching
+    if (!product) {
+      return {
+        error: 'PRODUCT_NOT_FOUND',
+        message: `Could not find "${params.productName}" in our catalog. Please check the product name!`,
+      };
+    }
+
+    // 5. Strict Variant (Size & Color) Matching
     let matchedVariant = null;
-    if (product && product.variants.length > 0) {
-      // 1. Explicit size or color parameter match
+    if (product.variants.length > 0) {
+      const distinctSizes = [...new Set(product.variants.map((v) => v.size).filter((s) => s && s.toLowerCase() !== 'default'))];
+      const distinctColors = [...new Set(product.variants.map((v) => v.color).filter((c) => c && c.toLowerCase() !== 'default'))];
+
+      // If user provided a size or color, it MUST match
       if (params.size || params.color) {
         matchedVariant = product.variants.find((v) => {
           const matchSize = params.size ? v.size?.toLowerCase() === params.size.trim().toLowerCase() : true;
           const matchColor = params.color ? v.color?.toLowerCase() === params.color.trim().toLowerCase() : true;
           return matchSize && matchColor;
         });
-      }
 
-      // 2. Detect size / color in productName text (e.g., "Black Hoodie XL" or "Size M")
-      if (!matchedVariant) {
-        const words = `${params.productName} ${params.size || ''}`.toLowerCase().split(/[\s,/-]+/);
-        for (const variant of product.variants) {
-          if (variant.size && words.includes(variant.size.toLowerCase())) {
-            matchedVariant = variant;
-            break;
-          }
+        // If no match was found for the requested size/color, DO NOT SILENTLY FALLBACK!
+        if (!matchedVariant) {
+          const invalidParts = [
+            params.size ? `Size "${params.size}"` : null,
+            params.color ? `Color "${params.color}"` : null,
+          ].filter(Boolean).join(' and ');
+
+          return {
+            error: 'VARIANT_NOT_FOUND',
+            message: `Sorry, ${product.name} is not available in ${invalidParts}. Available sizes: ${distinctSizes.join(', ') || 'Standard'}${distinctColors.length > 0 ? `, Colors: ${distinctColors.join(', ')}` : ''}. Please choose from the available options!`,
+          };
         }
       }
 
-      // 3. Fallback to in-stock variant or first variant
+      // If product has multiple sizes and customer didn't specify one, demand size
+      if (!matchedVariant && distinctSizes.length > 1) {
+        return {
+          error: 'SIZE_REQUIRED',
+          message: `Please specify your desired size for ${product.name}. Available sizes: ${distinctSizes.join(', ')}.`,
+        };
+      }
+
+      // Fallback only if product has a single standard variant
       if (!matchedVariant) {
         matchedVariant = product.variants.find((v) => v.stock > 0) || product.variants[0];
       }
     }
 
+    // 6. Check stock level
+    if (matchedVariant && matchedVariant.stock <= 0) {
+      return {
+        error: 'OUT_OF_STOCK',
+        message: `Sorry, ${product.name} in Size: ${matchedVariant.size || 'Standard'} is currently out of stock!`,
+      };
+    }
+
     const price = matchedVariant?.priceOverride || product?.price || 0;
-    const paymentMethod =
-      params.paymentMethod?.toUpperCase() === 'PREPAYMENT'
-        ? PaymentMethod.PREPAYMENT
-        : PaymentMethod.COD;
 
     // Check payment method restrictions
     if (product) {

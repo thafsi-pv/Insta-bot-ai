@@ -170,6 +170,8 @@ Remember:
               toolsExecuted.push('place_order');
               finalReply = orderResult.message;
               console.log(`🎉 [ORDER SAFEGUARD SUCCESS] Order ID: ${orderResult.orderId} created for ${orderResult.customerName}`);
+            } else if (orderResult.message) {
+              finalReply = orderResult.message;
             }
           }
         }
