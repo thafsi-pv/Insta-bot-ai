@@ -7,8 +7,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "prisma generate && ./node_modules/.bin/nest build",
-    "build:prod": "prisma generate && prisma migrate deploy && ./node_modules/.bin/nest build",
-    "migrate:deploy": "prisma migrate deploy",
+    "build:prod": "prisma generate && prisma db push --accept-data-loss && ./node_modules/.bin/nest build",
+    "db:push": "prisma db push --accept-data-loss",
     "db:seed": "ts-node prisma/seed.ts",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
