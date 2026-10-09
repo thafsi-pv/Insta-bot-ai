@@ -1,0 +1,234 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  STAFF
+}
+
+enum MediaType {
+  IMAGE
+  VIDEO
+  CAROUSEL
+}
+
+enum InstagramAccountStatus {
+  CONNECTED
+  DISCONNECTED
+  EXPIRED
+}
+
+enum ConversationStatus {
+  AI_ACTIVE
+  HUMAN_ACTIVE
+  CLOSED
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum SenderType {
+  CUSTOMER
+  AI
+  HUMAN
+  SYSTEM
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role     @default(ADMIN)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+model Product {
+  id              String           @id @default(uuid())
+  name            String
+  description     String?
+  price           Float
+  allowCod        Boolean          @default(true)
+  allowPrepayment Boolean          @default(true)
+  active          Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  variants        ProductVariant[]
+  media           ProductMedia[]
+  conversations   Conversation[]
+  orderItems      OrderItem[]
+
+  @@index([name])
+  @@map("products")
+}
+
+model ProductVariant {
+  id            String         @id @default(uuid())
+  productId     String
+  product       Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku           String?
+  size          String?
+  color         String?
+  priceOverride Float?
+  stock         Int            @default(0)
+  active        Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  conversations Conversation[]
+  orderItems    OrderItem[]
+
+  @@index([productId])
+  @@index([size])
+  @@index([color])
+  @@map("product_variants")
+}
+
+model ProductMedia {
+  id               String    @id @default(uuid())
+  productId        String
+  product          Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+  imageUrl         String
+  instagramMediaId String?
+  type             MediaType @default(IMAGE)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([productId])
+  @@index([instagramMediaId])
+  @@map("product_media")
+}
+
+model InstagramAccount {
+  id                   String                 @id @default(uuid())
+  businessId           String                 @default("default_business")
+  instagramUserId      String                 @unique
+  pageId               String?                // Facebook Page ID linked to this IG account
+  username             String
+  accessTokenEncrypted String
+  tokenExpiresAt       DateTime?
+  status               InstagramAccountStatus @default(CONNECTED)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @updatedAt
+  customers            Customer[]
+
+  @@index([instagramUserId])
+  @@index([pageId])
+  @@map("instagram_accounts")
+}
+
+model Customer {
+  id                 String           @id @default(uuid())
+  instagramAccountId String
+  instagramAccount   InstagramAccount @relation(fields: [instagramAccountId], references: [id], onDelete: Cascade)
+  instagramUserId    String
+  username           String?
+  name               String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  conversations      Conversation[]
+  orders             Order[]
+
+  @@unique([instagramAccountId, instagramUserId])
+  @@index([instagramUserId])
+  @@map("customers")
+}
+
+model Conversation {
+  id                String             @id @default(uuid())
+  customerId        String
+  customer          Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  selectedProductId String?
+  selectedProduct   Product?           @relation(fields: [selectedProductId], references: [id], onDelete: SetNull)
+  selectedVariantId String?
+  selectedVariant   ProductVariant?    @relation(fields: [selectedVariantId], references: [id], onDelete: SetNull)
+  status            ConversationStatus @default(AI_ACTIVE)
+  lastMessageAt     DateTime           @default(now())
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  messages          Message[]
+  orders            Order[]
+
+  @@index([customerId])
+  @@index([selectedProductId])
+  @@index([status])
+  @@map("conversations")
+}
+
+enum OrderStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  COMPLETED
+}
+
+enum PaymentMethod {
+  COD
+  PREPAYMENT
+}
+
+model Order {
+  id              String        @id @default(uuid())
+  conversationId  String?
+  conversation    Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  customerId      String
+  customer        Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  customerName    String
+  shippingAddress String
+  paymentMethod   PaymentMethod @default(COD)
+  status          OrderStatus   @default(PENDING_APPROVAL)
+  totalAmount     Float         @default(0)
+  items           OrderItem[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id        String          @id @default(uuid())
+  orderId   String
+  order     Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variantId String?
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  name      String
+  quantity  Int             @default(1)
+  price     Float
+  createdAt DateTime        @default(now())
+
+  @@index([orderId])
+  @@map("order_items")
+}
+
+model Message {
+  id                 String           @id @default(uuid())
+  conversationId     String
+  conversation       Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  instagramMessageId String?          @unique
+  direction          MessageDirection
+  senderType         SenderType
+  content            String
+  metadata           Json?
+  createdAt          DateTime         @default(now())
+
+  @@index([conversationId])
+  @@index([instagramMessageId])
+  @@map("messages")
+}
