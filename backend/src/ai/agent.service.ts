@@ -4,6 +4,7 @@ import { AISettingsService } from './ai-settings.service';
 import { ProductTools } from './tools/product-tools';
 import { PrismaService } from '../prisma/prisma.service';
 import { AgentContext, AgentResult } from './ai.types';
+import { OrderStatus } from '@prisma/client';
 import OpenAI from 'openai';
 
 @Injectable()
@@ -19,11 +20,42 @@ export class AgentService {
 
   async processCustomerMessage(context: AgentContext): Promise<AgentResult> {
     const settings = this.aiSettingsService.getSettings();
-    const tools = this.productTools.getToolDefinitions() as OpenAI.Chat.Completions.ChatCompletionTool[];
 
     let selectedProductId = context.selectedProductId || null;
     let selectedVariantId = context.selectedVariantId || null;
     const toolsExecuted: string[] = [];
+
+    // Check if customer has an active order (pending approval or approved)
+    const activeOrder = await this.prisma.order.findFirst({
+      where: {
+        conversationId: context.conversationId,
+        status: { in: [OrderStatus.PENDING_APPROVAL, OrderStatus.APPROVED] },
+      },
+      select: { id: true, customerName: true, status: true, totalAmount: true },
+    });
+
+    // Detect user intent from the latest customer message
+    const lastUserMsg =
+      [...context.recentMessages].reverse().find((m) => m.role === 'user')?.content || '';
+    const lastLower = lastUserMsg.toLowerCase();
+
+    const isBuyingIntent =
+      lastLower.includes('buy') ||
+      lastLower.includes('order') ||
+      lastLower.includes('purchase') ||
+      lastLower.includes('book') ||
+      lastLower.includes('name:') ||
+      lastLower.includes('address:') ||
+      lastLower.includes('cod') ||
+      lastLower.includes('prepay') ||
+      lastLower.includes('want this') ||
+      lastLower.includes('take this');
+
+    // Selective tool loading: omit cancel/update if no active order exists to save prompt tokens
+    const tools = this.productTools.getToolDefinitions({
+      includeOrderPlacement: !activeOrder,
+      includeOrderManagement: Boolean(activeOrder),
+    }) as OpenAI.Chat.Completions.ChatCompletionTool[];
 
     // Priority 1: Instagram media context
     let mediaContextText = '';
@@ -42,7 +74,7 @@ export class AgentService {
         const inStockVariants = media.product.variants.filter((v) => v.stock > 0);
         const sizes = [...new Set(inStockVariants.map((v) => v.size).filter(Boolean))];
         const colors = [...new Set(inStockVariants.map((v) => v.color).filter(Boolean))];
-        mediaContextText = `\n[POST CONTEXT]: Product "${media.product.name}" ID:${media.product.id} ₹${media.product.price}. In-stock sizes:${sizes.join(',')||'one-size'} colors:${colors.join(',')||'default'}. Use this directly.`;
+        mediaContextText = `[POST CONTEXT]: Product "${media.product.name}" ID:${media.product.id} ₹${media.product.price}. Sizes:${sizes.join(',') || 'one-size'} Colors:${colors.join(',') || 'default'}.`;
       }
     }
 
@@ -58,19 +90,19 @@ export class AgentService {
         const inStock = selectedProduct.variants.filter((v) => v.stock > 0);
         const sz = [...new Set(inStock.map((v) => v.size).filter(Boolean))];
         const cl = [...new Set(inStock.map((v) => v.color).filter(Boolean))];
-        conversationContextText = `\n[ACTIVE PRODUCT]: "${selectedProduct.name}" ID:${selectedProduct.id} ₹${selectedProduct.price}. Sizes:${sz.join(',')||'one-size'} Colors:${cl.join(',')||'default'}.`;
+        conversationContextText = `[ACTIVE PRODUCT]: "${selectedProduct.name}" ID:${selectedProduct.id} ₹${selectedProduct.price}. Sizes:${sz.join(',') || 'one-size'} Colors:${cl.join(',') || 'default'}.`;
       }
     }
 
-    const systemPrompt = `${settings.systemPrompt}${mediaContextText}${conversationContextText}
-
-Remember:
-- STRICT STORE SCOPE: You ONLY discuss our clothing store, products, sizes, colors, prices, and orders.
-- NEVER answer general knowledge, math, coding, AI explanations, or unrelated questions. Politely redirect: "We're only here to assist with our store products and orders! 😊 Let us know if you have any questions about our clothes or placing an order."
-- If asked "are you AI" or "are you a bot", reply naturally as store staff: "Hey! I'm here from the team to help you with our products and orders. How can I help you today? 😊"
-- Check stock accurately using the database context or tools.
-- Never say a size is in stock if stock is 0.
-- If multiple products match a general inquiry, list options and prices, then ask the customer to pick one.`;
+    // Modular prompt builder: assemble ONLY required prompt blocks based on current state
+    const systemPrompt = this.buildModularPrompt({
+      customSystemPrompt: settings.systemPrompt,
+      bankDetails: settings.bankDetails,
+      mediaContextText,
+      conversationContextText,
+      activeOrder,
+      isBuyingIntent: Boolean(isBuyingIntent || selectedProductId),
+    });
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: systemPrompt },
@@ -79,6 +111,12 @@ Remember:
         content: m.content,
       })),
     ];
+
+    // Token & usage accumulators across tool-call loop
+    let totalPromptTokens = 0;
+    let totalCompletionTokens = 0;
+    let totalTokens = 0;
+    let modelUsed = settings.model;
 
     // Tool execution loop (max 3 rounds to avoid infinite loops)
     let currentRound = 0;
@@ -91,6 +129,17 @@ Remember:
         messages,
         tools,
       });
+
+      if (completion.usage) {
+        totalPromptTokens += completion.usage.prompt_tokens || 0;
+        totalCompletionTokens += completion.usage.completion_tokens || 0;
+        totalTokens +=
+          completion.usage.total_tokens ||
+          (completion.usage.prompt_tokens || 0) + (completion.usage.completion_tokens || 0);
+      }
+      if (completion.model) {
+        modelUsed = completion.model;
+      }
 
       const message = completion.choices[0]?.message;
       if (!message) {
@@ -204,6 +253,12 @@ Remember:
           selectedVariantId,
           toolCallsCount: toolsExecuted.length,
           toolsExecuted,
+          tokensUsed: {
+            prompt: totalPromptTokens,
+            completion: totalCompletionTokens,
+            total: totalTokens,
+          },
+          modelUsed,
         };
       }
     }
@@ -215,7 +270,82 @@ Remember:
       selectedVariantId,
       toolCallsCount: toolsExecuted.length,
       toolsExecuted,
+      tokensUsed: {
+        prompt: totalPromptTokens,
+        completion: totalCompletionTokens,
+        total: totalTokens,
+      },
+      modelUsed,
     };
+  }
+
+  /**
+   * Split and conditionally build system prompt blocks to minimize token consumption.
+   * Only relevant instructions and rules are sent depending on current intent and state.
+   */
+  private buildModularPrompt(params: {
+    customSystemPrompt?: string;
+    bankDetails?: string;
+    mediaContextText?: string;
+    conversationContextText?: string;
+    activeOrder?: { id: string; customerName: string; status: string } | null;
+    isBuyingIntent: boolean;
+  }): string {
+    const sections: string[] = [];
+
+    // 1. Core Base (always included: staff identity + strict scope guardrails)
+    sections.push(
+      `You are the friendly Instagram sales assistant for our clothing store. Act as store staff ("Hey! I'm here from the team to help you 😊"). NEVER say you are AI or a bot.\n` +
+      `RULES:\n` +
+      `1. STRICT STORE SCOPE: Only answer about our store clothing, sizes, colors, prices, stock, and orders. Politely redirect unrelated queries.\n` +
+      `2. CONCISE: Keep replies brief and conversational (1-3 sentences max).`
+    );
+
+    // 2. Active Product / Media Context (only included when relevant product is active)
+    if (params.mediaContextText) {
+      sections.push(params.mediaContextText);
+    }
+    if (params.conversationContextText) {
+      sections.push(params.conversationContextText);
+    }
+
+    // 3. Conditional Mode: Active Order vs Buying vs Inquiry
+    if (params.activeOrder) {
+      sections.push(
+        `ORDER STATUS:\n` +
+        `Active Order #${params.activeOrder.id.slice(-6)} for "${params.activeOrder.customerName}" (Status: ${params.activeOrder.status}).\n` +
+        `- If customer asks to cancel ("cancel order", "don't want it", "reject"), call cancel_order immediately.\n` +
+        `- If customer asks to change size/color/product, call update_order immediately.`
+      );
+    } else if (params.isBuyingIntent) {
+      const bankSummary = params.bankDetails
+        ? ` For Prepayment, share UPI details and ask for payment screenshot.`
+        : '';
+      sections.push(
+        `ORDERING:\n` +
+        `- To place order, required fields: Name, Product Name, Size (if applicable), Colour (if applicable), Payment (COD/Prepayment), Address.\n` +
+        `- STRICT VALIDATION: NEVER call place_order with fake/invalid data (e.g. numeric name, gibberish address). Ask customer for valid details first.\n` +
+        `- Respect payment rules (COD vs Prepayment).${bankSummary}`
+      );
+    } else {
+      sections.push(
+        `INQUIRY MODE:\n` +
+        `- Answer customer questions directly (price, available sizes, colors, photos).\n` +
+        `- Check stock accurately. Never say in-stock if stock is 0.\n` +
+        `- Do not push long ordering forms for simple inquiries. Never call place_order for simple inquiries.`
+      );
+    }
+
+    // 4. Custom instructions if configured in settings (and not the default template)
+    if (
+      params.customSystemPrompt &&
+      !params.customSystemPrompt.includes('CORE RULES:') &&
+      params.customSystemPrompt.trim().length > 0
+    ) {
+      sections.push(`CUSTOM STORE NOTES:\n${params.customSystemPrompt.trim()}`);
+    }
+
+    return sections.join('\n\n');
   }
 
   private parseOrderFromText(text: string, defaultProductName?: string) {

@@ -27,7 +27,7 @@ export class ConversationsService {
       };
     }
 
-    return this.prisma.conversation.findMany({
+    const conversations = await this.prisma.conversation.findMany({
       where,
       include: {
         customer: {
@@ -45,6 +45,44 @@ export class ConversationsService {
       },
       orderBy: { lastMessageAt: 'desc' },
     });
+
+    // Aggregate token usage per conversation from AI messages
+    const convIds = conversations.map((c) => c.id);
+    const tokenMessages =
+      convIds.length > 0
+        ? await this.prisma.message.findMany({
+            where: {
+              conversationId: { in: convIds },
+              senderType: SenderType.AI,
+            },
+            select: {
+              conversationId: true,
+              metadata: true,
+            },
+          })
+        : [];
+
+    const tokensMap: Record<
+      string,
+      { prompt: number; completion: number; total: number }
+    > = {};
+    for (const msg of tokenMessages) {
+      const meta = msg.metadata as any;
+      const t = meta?.tokens;
+      if (t && typeof t.total === 'number') {
+        if (!tokensMap[msg.conversationId]) {
+          tokensMap[msg.conversationId] = { prompt: 0, completion: 0, total: 0 };
+        }
+        tokensMap[msg.conversationId].prompt += t.prompt || 0;
+        tokensMap[msg.conversationId].completion += t.completion || 0;
+        tokensMap[msg.conversationId].total += t.total || 0;
+      }
+    }
+
+    return conversations.map((conv) => ({
+      ...conv,
+      tokensUsed: tokensMap[conv.id] || { prompt: 0, completion: 0, total: 0 },
+    }));
   }
 
   async findOne(id: string) {
@@ -73,7 +111,28 @@ export class ConversationsService {
       throw new NotFoundException(`Conversation with ID ${id} not found`);
     }
 
-    return conversation;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let totalTokens = 0;
+
+    for (const msg of conversation.messages) {
+      const meta = msg.metadata as any;
+      const t = meta?.tokens;
+      if (t && typeof t.total === 'number') {
+        promptTokens += t.prompt || 0;
+        completionTokens += t.completion || 0;
+        totalTokens += t.total || 0;
+      }
+    }
+
+    return {
+      ...conversation,
+      tokensUsed: {
+        prompt: promptTokens,
+        completion: completionTokens,
+        total: totalTokens,
+      },
+    };
   }
 
   async updateStatus(id: string, status: ConversationStatus) {

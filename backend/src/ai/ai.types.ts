@@ -35,4 +35,10 @@ export interface AgentResult {
   selectedVariantId?: string | null;
   toolCallsCount: number;
   toolsExecuted: string[];
+  tokensUsed?: {
+    prompt: number;
+    completion: number;
+    total: number;
+  };
+  modelUsed?: string;
 }

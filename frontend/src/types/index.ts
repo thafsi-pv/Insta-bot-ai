@@ -107,6 +107,11 @@ export interface Conversation {
   createdAt: string;
   updatedAt: string;
   messages?: Message[];
+  tokensUsed?: {
+    prompt: number;
+    completion: number;
+    total: number;
+  };
 }
 
 export type OrderStatus = 'PENDING_APPROVAL' | 'APPROVED' | 'REJECTED' | 'COMPLETED';

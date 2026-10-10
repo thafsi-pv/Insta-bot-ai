@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Package,
   Loader2,
+  Zap,
 } from 'lucide-react';
 import { conversationsApi } from '../../api/conversations';
 import type { Conversation, ConversationStatus, Message } from '../../types';
@@ -258,11 +259,22 @@ export const ConversationsPage: React.FC = () => {
                         {lastMsg}
                       </p>
 
-                      <div className="flex items-center justify-between">
-                        {getStatusBadge(conv.status)}
-                        {conv.selectedProduct && (
-                          <span className="text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20 truncate max-w-[100px]">
-                            {conv.selectedProduct.name}
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {getStatusBadge(conv.status)}
+                          {conv.selectedProduct && (
+                            <span className="text-[10px] text-purple-400 bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20 truncate max-w-[90px]">
+                              {conv.selectedProduct.name}
+                            </span>
+                          )}
+                        </div>
+                        {Boolean(conv.tokensUsed?.total) && (
+                          <span
+                            className="text-[10px] text-amber-400 bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20 flex items-center gap-0.5 shrink-0"
+                            title={`Total: ${conv.tokensUsed?.total} (Prompt: ${conv.tokensUsed?.prompt}, Completion: ${conv.tokensUsed?.completion})`}
+                          >
+                            <Zap className="w-2.5 h-2.5 text-amber-400" />
+                            {conv.tokensUsed!.total.toLocaleString()} tok
                           </span>
                         )}
                       </div>
@@ -290,13 +302,22 @@ export const ConversationsPage: React.FC = () => {
                     {selectedConversation.customer?.username?.charAt(0).toUpperCase() || 'U'}
                   </div>
                   <div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-bold text-white text-sm">
                         @{selectedConversation.customer?.username || 'User'}
                       </h3>
                       <span className="text-[10px] text-slate-400 bg-slate-800 px-2 py-0.5 rounded-full border border-slate-700">
                         IGSID: {selectedConversation.customer?.instagramUserId}
                       </span>
+                      {selectedConversation.tokensUsed && (
+                        <span
+                          className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full flex items-center gap-1 font-mono"
+                          title={`Prompt Tokens: ${selectedConversation.tokensUsed.prompt.toLocaleString()} | Completion Tokens: ${selectedConversation.tokensUsed.completion.toLocaleString()}`}
+                        >
+                          <Zap className="w-3 h-3 text-amber-400" />
+                          <span className="font-semibold">{selectedConversation.tokensUsed.total.toLocaleString()}</span> tokens
+                        </span>
+                      )}
                     </div>
                     <p className="text-[11px] text-slate-400">
                       Connected to @{selectedConversation.customer?.instagramAccount?.username || 'bot'}
@@ -408,12 +429,23 @@ export const ConversationsPage: React.FC = () => {
                                 </>
                               )}
                             </span>
-                            <span>
-                              {new Date(msg.createdAt).toLocaleTimeString([], {
-                                hour: '2-digit',
-                                minute: '2-digit',
-                              })}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              {isAi && (msg.metadata as any)?.tokens?.total && (
+                                <span
+                                  className="text-[9px] bg-black/30 border border-white/10 px-1.5 py-0.5 rounded text-amber-200 flex items-center gap-0.5 font-mono"
+                                  title={`Prompt: ${(msg.metadata as any).tokens.prompt} | Completion: ${(msg.metadata as any).tokens.completion}`}
+                                >
+                                  <Zap className="w-2 h-2 text-amber-300" />
+                                  {(msg.metadata as any).tokens.total} tok
+                                </span>
+                              )}
+                              <span>
+                                {new Date(msg.createdAt).toLocaleTimeString([], {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
+                              </span>
+                            </div>
                           </div>
 
                           <p className="whitespace-pre-wrap">{msg.content}</p>

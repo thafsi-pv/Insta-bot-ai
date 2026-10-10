@@ -9,8 +9,11 @@ export class ProductTools {
 
   constructor(private prisma: PrismaService) {}
 
-  getToolDefinitions(): AIToolDefinition[] {
-    return [
+  getToolDefinitions(options?: {
+    includeOrderPlacement?: boolean;
+    includeOrderManagement?: boolean;
+  }): AIToolDefinition[] {
+    const allTools: AIToolDefinition[] = [
       {
         type: 'function',
         function: {
@@ -227,6 +230,20 @@ export class ProductTools {
         },
       },
     ];
+
+    return allTools.filter((tool) => {
+      const name = tool.function.name;
+      if (options?.includeOrderPlacement === false && name === 'place_order') {
+        return false;
+      }
+      if (
+        options?.includeOrderManagement === false &&
+        (name === 'cancel_order' || name === 'update_order')
+      ) {
+        return false;
+      }
+      return true;
+    });
   }
 
   async executeTool(name: string, args: Record<string, any>): Promise<any> {

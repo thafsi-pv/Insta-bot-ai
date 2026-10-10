@@ -35,3 +35,6 @@ Thumbs.db
 # Coverage / Temporary files
 coverage/
 *.tsbuildinfo
+
+MyNotes
+

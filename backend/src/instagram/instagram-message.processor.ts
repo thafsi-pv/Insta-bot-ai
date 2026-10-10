@@ -154,6 +154,9 @@ export class InstagramMessageProcessor extends WorkerHost {
 
       console.log(`✨ [AI AGENT RESPONSE GENERATED]`);
       console.log(`   ├─ Tools Executed : ${agentResult.toolCallsCount} (${agentResult.toolsExecuted?.join(', ') || 'None'})`);
+      console.log(
+        `   ├─ Tokens Used    : ${agentResult.tokensUsed?.total || 0} (Prompt: ${agentResult.tokensUsed?.prompt || 0}, Completion: ${agentResult.tokensUsed?.completion || 0})`,
+      );
       console.log(`   └─ Reply Message  : "${agentResult.reply}"`);
 
       // 5. Send message back via Instagram Graph API
@@ -164,6 +167,10 @@ export class InstagramMessageProcessor extends WorkerHost {
         text: agentResult.reply,
         conversationId,
         senderType: SenderType.AI,
+        metadata: {
+          tokens: agentResult.tokensUsed,
+          model: agentResult.modelUsed,
+        },
       });
 
       console.log(`🎉 [DELIVERY SUCCESS] Meta Message ID: ${sendResult.messageId}\n`);

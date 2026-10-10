@@ -23,6 +23,7 @@ export class InstagramMessageService {
     text: string;
     conversationId?: string;
     senderType?: SenderType;
+    metadata?: Record<string, any>;
   }) {
     const accessToken = await this.authService.getDecryptedToken(params.instagramAccountId);
     const account = await this.prisma.instagramAccount.findUnique({
@@ -68,7 +69,10 @@ export class InstagramMessageService {
             direction: MessageDirection.OUTBOUND,
             senderType: params.senderType || SenderType.AI,
             content: params.text,
-            metadata: response.data || {},
+            metadata: {
+              ...(response.data || {}),
+              ...(params.metadata || {}),
+            },
           },
         });
 
