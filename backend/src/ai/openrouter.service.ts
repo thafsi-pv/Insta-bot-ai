@@ -112,4 +112,47 @@ export class OpenRouterService {
       max_tokens: 350,
     });
   }
+  async getCredits() {
+    const settings = this.aiSettingsService.getSettings();
+    const apiKey =
+      settings.apiKey ||
+      this.configService.get<string>('OPENROUTER_API_KEY') ||
+      process.env.OPENROUTER_API_KEY ||
+      '';
+
+    if (!apiKey) {
+      throw new BadRequestException('OpenRouter API key is not configured.');
+    }
+
+    try {
+      // Use native fetch — OpenRouter credits endpoint is not in the OpenAI SDK
+      const response = await fetch('https://openrouter.ai/api/v1/credits', {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error((err as any)?.error?.message || `HTTP ${response.status}`);
+      }
+
+      const json: any = await response.json();
+      const data = json?.data || json;
+      const totalCredits: number = data.total_credits ?? 0;
+      const totalUsage: number = data.total_usage ?? 0;
+      const remaining = totalCredits - totalUsage;
+
+      return {
+        totalCredits: parseFloat(totalCredits.toFixed(4)),
+        totalUsage: parseFloat(totalUsage.toFixed(4)),
+        remaining: parseFloat(remaining.toFixed(4)),
+        isFreeModel: this.aiSettingsService.getSettings().model?.includes(':free') ?? false,
+        model: this.aiSettingsService.getSettings().model,
+      };
+    } catch (err: any) {
+      this.logger.error(`Failed to fetch OpenRouter credits: ${err.message}`);
+      throw new BadRequestException(`Could not fetch credits: ${err.message}`);
+    }
+  }
 }

@@ -41,6 +41,11 @@ export class AISettingsController {
     return this.openRouterService.testConnection(body?.apiKey, body?.model);
   }
 
+  @Get('credits')
+  async getCredits() {
+    return this.openRouterService.getCredits();
+  }
+
   @Post('playground')
   async runPlayground(
     @Body()

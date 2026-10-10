@@ -17,6 +17,9 @@ import {
   Terminal,
   Zap,
   DollarSign,
+  Wallet,
+  TrendingDown,
+  CreditCard,
 } from 'lucide-react';
 
 export const AISettingsPage: React.FC = () => {
@@ -98,6 +101,17 @@ export const AISettingsPage: React.FC = () => {
     onError: (err: any) => {
       setPlaygroundResult({ error: err.message });
     },
+  });
+
+  // 5. Fetch OpenRouter credits
+  const { data: credits, isLoading: creditsLoading, isError: creditsError, refetch: refetchCredits } = useQuery({
+    queryKey: ['openrouter-credits'],
+    queryFn: async () => {
+      const res: any = await apiClient.get('/settings/ai/credits');
+      return res.data || res;
+    },
+    retry: false,
+    staleTime: 60_000, // refresh every 60s
   });
 
   const handleSave = (e: React.FormEvent) => {
@@ -351,6 +365,115 @@ Rules:
 
         {/* Live Playground & Tools Column */}
         <div className="lg:col-span-5 space-y-6">
+
+          {/* ── OpenRouter Credits Card ── */}
+          <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-white font-display">OpenRouter Credits</h3>
+                  <p className="text-xs text-slate-400">Live balance &amp; usage from OpenRouter</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => refetchCredits()}
+                disabled={creditsLoading}
+                className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                title="Refresh balance"
+              >
+                <RefreshCw className={`w-4 h-4 ${creditsLoading ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            {creditsLoading && (
+              <div className="flex items-center gap-2 text-xs text-slate-400">
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Fetching balance...
+              </div>
+            )}
+
+            {creditsError && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                Could not load credits. Check your API key.
+              </div>
+            )}
+
+            {credits && !creditsError && (() => {
+              const usedPct = credits.totalCredits > 0
+                ? Math.min(100, (credits.totalUsage / credits.totalCredits) * 100)
+                : 0;
+              const barColor = usedPct > 85 ? 'bg-rose-500' : usedPct > 60 ? 'bg-amber-500' : 'bg-emerald-500';
+              const statusColor = usedPct > 85 ? 'text-rose-400' : usedPct > 60 ? 'text-amber-400' : 'text-emerald-400';
+              const statusBg = usedPct > 85 ? 'bg-rose-500/10 border-rose-500/20' : usedPct > 60 ? 'bg-amber-500/10 border-amber-500/20' : 'bg-emerald-500/10 border-emerald-500/20';
+              const statusLabel = usedPct > 85 ? 'Low Balance' : usedPct > 60 ? 'Moderate' : 'Healthy';
+
+              return (
+                <div className="space-y-4">
+                  {/* Free model badge */}
+                  {credits.isFreeModel && (
+                    <div className="flex items-center gap-2 p-2.5 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="text-[11px] text-emerald-400 font-medium">
+                        Free model active — credits are <strong>not consumed</strong> per message
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Balance rows */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-center">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <Wallet className="w-3.5 h-3.5 text-indigo-400" />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wide">Total</span>
+                      </div>
+                      <span className="text-sm font-bold text-white font-mono">${credits.totalCredits.toFixed(3)}</span>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-center">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <TrendingDown className="w-3.5 h-3.5 text-rose-400" />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wide">Used</span>
+                      </div>
+                      <span className="text-sm font-bold text-rose-300 font-mono">${credits.totalUsage.toFixed(4)}</span>
+                    </div>
+                    <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800 text-center">
+                      <div className="flex items-center justify-center gap-1 mb-1">
+                        <DollarSign className="w-3.5 h-3.5 text-emerald-400" />
+                        <span className="text-[10px] text-slate-400 uppercase tracking-wide">Left</span>
+                      </div>
+                      <span className={`text-sm font-bold font-mono ${statusColor}`}>${credits.remaining.toFixed(4)}</span>
+                    </div>
+                  </div>
+
+                  {/* Usage progress bar */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[11px] text-slate-400">Credit consumption</span>
+                      <span className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${statusBg} ${statusColor}`}>
+                        {statusLabel} · {usedPct.toFixed(1)}% used
+                      </span>
+                    </div>
+                    <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                        style={{ width: `${usedPct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Active model */}
+                  <div className="text-[11px] text-slate-500 font-mono truncate">
+                    Model: <span className="text-slate-300">{credits.model}</span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* ── Live Playground ── */}
           <div className="glass-panel p-6 rounded-2xl border border-slate-800 space-y-4">
             <div className="flex items-center gap-3">
               <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
