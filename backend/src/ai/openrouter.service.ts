@@ -61,7 +61,7 @@ export class OpenRouterService {
     const model =
       customModel ||
       this.aiSettingsService.getSettings().model ||
-      'meta-llama/llama-3.3-70b-instruct:free';
+      'nvidia/nemotron-3-ultra-550b-a55b:free';
 
     try {
       this.logger.log(`Testing OpenRouter connection with model: ${model}...`);

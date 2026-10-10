@@ -27,7 +27,7 @@ export const AISettingsPage: React.FC = () => {
 
   const [apiKey, setApiKey] = useState('');
   const [showApiKey, setShowApiKey] = useState(false);
-  const [model, setModel] = useState('meta-llama/llama-3.3-70b-instruct:free');
+  const [model, setModel] = useState('nvidia/nemotron-3-ultra-550b-a55b:free');
   const [systemPrompt, setSystemPrompt] = useState('');
   const [temperature, setTemperature] = useState(0.2);
   const [bankDetails, setBankDetails] = useState('');
@@ -52,7 +52,7 @@ export const AISettingsPage: React.FC = () => {
 
   useEffect(() => {
     if (settings) {
-      setModel(settings.model || 'meta-llama/llama-3.3-70b-instruct:free');
+      setModel(settings.model || 'nvidia/nemotron-3-ultra-550b-a55b:free');
       setSystemPrompt(settings.systemPrompt || '');
       setTemperature(settings.temperature ?? 0.2);
       setBankDetails(settings.bankDetails || '');

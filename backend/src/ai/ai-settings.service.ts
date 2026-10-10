@@ -16,7 +16,7 @@ export class AISettingsService {
         '',
       model: this.configService.get<string>(
         'OPENROUTER_MODEL',
-        'google/gemini-2.0-flash-exp:free',
+        'nvidia/nemotron-3-ultra-550b-a55b:free',
       ),
       systemPrompt: `You are the Instagram sales assistant for our clothing store.
 
@@ -66,9 +66,10 @@ CORE RULES:
       temperature: this.settings.temperature,
       bankDetails: this.settings.bankDetails,
       availableModels: [
+        { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', name: 'NVIDIA Nemotron 3 Ultra 550B (Best Free Model - High Quality)', isFree: true },
+        { id: 'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free', name: 'NVIDIA Nemotron 3 Nano Omni (Fastest Free Model - 770ms)', isFree: true },
         { id: 'openrouter/free', name: 'OpenRouter Auto Free (High Quota Free Router)', isFree: true },
-        { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B (Free)', isFree: true },
-        { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash (Free)', isFree: true },
+        { id: 'liquid/lfm-2.5-2.6b:free', name: 'LiquidAI LFM 2.5 2.6B (Free)', isFree: true },
         { id: 'google/gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite (Lowest Cost)', isFree: false },
         { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash (Fast & Cheap)', isFree: false },
         { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3 (Very Cheap)', isFree: false },
