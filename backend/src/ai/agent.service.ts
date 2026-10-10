@@ -39,13 +39,10 @@ export class AgentService {
 
       if (media?.product) {
         selectedProductId = media.product.id;
-        mediaContextText = `\n[INSTAGRAM POST CONTEXT]: The customer interacted with the post for product "${media.product.name}" (ID: ${media.product.id}, Price: ₹${media.product.price}). Variants: ${JSON.stringify(
-          media.product.variants.map((v) => ({
-            size: v.size,
-            color: v.color,
-            stock: v.stock,
-          })),
-        )}. Use this product context directly.`;
+        const inStockVariants = media.product.variants.filter((v) => v.stock > 0);
+        const sizes = [...new Set(inStockVariants.map((v) => v.size).filter(Boolean))];
+        const colors = [...new Set(inStockVariants.map((v) => v.color).filter(Boolean))];
+        mediaContextText = `\n[POST CONTEXT]: Product "${media.product.name}" ID:${media.product.id} ₹${media.product.price}. In-stock sizes:${sizes.join(',')||'one-size'} colors:${colors.join(',')||'default'}. Use this directly.`;
       }
     }
 
@@ -58,13 +55,10 @@ export class AgentService {
       });
 
       if (selectedProduct) {
-        conversationContextText = `\n[EXISTING CONVERSATION CONTEXT]: The customer is already inquiring about product "${selectedProduct.name}" (ID: ${selectedProduct.id}, Price: ₹${selectedProduct.price}). Current variant stock: ${JSON.stringify(
-          selectedProduct.variants.map((v) => ({
-            size: v.size,
-            color: v.color,
-            stock: v.stock,
-          })),
-        )}. Focus on this product for variant/size/price follow-ups.`;
+        const inStock = selectedProduct.variants.filter((v) => v.stock > 0);
+        const sz = [...new Set(inStock.map((v) => v.size).filter(Boolean))];
+        const cl = [...new Set(inStock.map((v) => v.color).filter(Boolean))];
+        conversationContextText = `\n[ACTIVE PRODUCT]: "${selectedProduct.name}" ID:${selectedProduct.id} ₹${selectedProduct.price}. Sizes:${sz.join(',')||'one-size'} Colors:${cl.join(',')||'default'}.`;
       }
     }
 
@@ -120,14 +114,12 @@ Remember:
               this.logger.warn(`Failed to parse tool call arguments: ${toolCall.function.arguments}`);
             }
 
-            console.log(`   🛠️ [AGENT TOOL CALL] Executing "${toolName}" with args:`, JSON.stringify(args));
             const enrichedArgs = {
               ...args,
               conversationId: context.conversationId,
               customerId: context.customerId,
             };
             const toolResult = await this.productTools.executeTool(toolName, enrichedArgs);
-            console.log(`   └─ Tool Result:`, JSON.stringify(toolResult).slice(0, 150) + '...');
 
             // If a product was searched or fetched, track selectedProductId
             if (args.productId) {
@@ -136,11 +128,17 @@ Remember:
               selectedProductId = toolResult.products[0].id;
             }
 
+            // Trim tool result to reduce tokens: cap at 800 chars
+            const toolResultStr = JSON.stringify(toolResult);
+            const trimmedResult = toolResultStr.length > 800
+              ? toolResultStr.slice(0, 800) + '...}'
+              : toolResultStr;
+
             // Append tool response
             messages.push({
               role: 'tool',
               tool_call_id: toolCall.id,
-              content: JSON.stringify(toolResult),
+              content: trimmedResult,
             });
           }
         }

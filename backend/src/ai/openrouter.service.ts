@@ -109,7 +109,7 @@ export class OpenRouterService {
       tools: params.tools,
       tool_choice: params.tools && params.tools.length > 0 ? 'auto' : undefined,
       temperature,
-      max_tokens: 600,
+      max_tokens: 350,
     });
   }
 }

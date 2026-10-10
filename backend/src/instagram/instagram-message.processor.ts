@@ -130,7 +130,7 @@ export class InstagramMessageProcessor extends WorkerHost {
     const recentMessages = await this.prisma.message.findMany({
       where: { conversationId },
       orderBy: { createdAt: 'desc' },
-      take: 6,
+      take: 4,
     });
 
     const formattedMessages = recentMessages.reverse().map((msg) => ({
